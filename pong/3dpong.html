@@ -9,7 +9,7 @@
             margin: 0;
             overflow: hidden;
             background-color: #000;
-            font-family: Arial, sans-serif;
+            font-family: "Roboto Mono", monospace;
         }
         canvas {
             display: block;
@@ -53,17 +53,60 @@
             z-index: 200;
         }
         #winMessage button {
-            background-color: #4CAF50;
+            background: linear-gradient(145deg, #5d5d5d, #4e4e4e);
             border: none;
+            border-radius: 8px;
             color: white;
             padding: 15px 32px;
+            width: 180px;
+            height: 60px;
             text-align: center;
             text-decoration: none;
             display: inline-block;
-            font-size: 16px;
-            margin: 10px 2px;
+            font-size: 18px;
+            font-weight: bold;
+            margin: 20px 0 10px;
             cursor: pointer;
-            border-radius: 5px;
+            transform-style: preserve-3d;
+            position: relative;
+            transform: translateZ(10px);
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.4), 
+                        0 6px 6px rgba(0,0,0,0.3),
+                        0 0 0 2px rgba(255,255,255,0.2);
+            text-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        }
+
+        #winMessage button:hover {
+            background: linear-gradient(145deg, #666666, #555555);
+            transform: translateZ(5px);
+            box-shadow: 0 5px 10px rgba(0,0,0,0.4), 
+                       0 3px 3px rgba(0,0,0,0.3),
+                       0 0 0 2px rgba(255,255,255,0.3);
+        }
+
+        #winMessage button:active {
+            transform: translateZ(2px);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.4), 
+                       0 1px 2px rgba(0,0,0,0.3),
+                       0 0 0 2px rgba(255,255,255,0.4);
+        }
+        
+        /* Improved mobile styles */
+        @media (max-width: 767px) {
+            #score {
+                top: 10px;
+                font-size: 2rem;
+            }
+            
+            @media (orientation: landscape) {
+                #score {
+                    top: -10px;
+                    font-size: 1.8rem;
+                    text-shadow: 0 0 10px rgba(0, 0, 0, 0.9);
+                    z-index: 150;
+                }
+            }
         }
     </style>
 </head>
@@ -72,7 +115,7 @@
     <div id="instructions">AI vs AI Mode | Press SPACE to take control | ↑ ↓ Arrow keys or mouse to move</div>
     <div id="winMessage">
         <p id="winText"></p>
-        <button id="playAgain">Play Again</button>
+        <button id="playAgain">PLAY AGAIN</button>
     </div>
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -146,6 +189,14 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.shadowMap.enabled = true;
             document.body.appendChild(renderer.domElement);
+            
+            // Initial responsive adjustments based on device
+            if (isMobile) {
+                if (window.innerHeight > window.innerWidth) {
+                    // Portrait orientation initial setup
+                    camera.position.z = 1000;
+                }
+            }
             
             createLights();
             createGameElements();
@@ -304,6 +355,14 @@
             centerLine.position.z = 1;
             scene.add(centerLine);
             
+            // Initial scaling for mobile
+            if (isMobile && window.innerHeight > window.innerWidth) {
+                gameField.scale.set(0.7, 0.7, 0.7);
+                paddle1.scale.set(1.5, 1.5, 1.5);
+                paddle2.scale.set(1.5, 1.5, 1.5);
+                ball.scale.set(1.5, 1.5, 1.5);
+            }
+            
             resetBall();
         }
         
@@ -313,11 +372,33 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             
             isMobile = window.innerWidth < 768;
+            
+            // Adjust camera based on device and orientation
             if (isMobile) {
-                camera.position.z = 700;
+                if (window.innerHeight > window.innerWidth) {
+                    // Portrait mode
+                    camera.position.z = 1000;
+                    // Scale down the game field for portrait mode
+                    gameField.scale.set(0.7, 0.7, 0.7);
+                    paddle1.scale.set(1.5, 1.5, 1.5);
+                    paddle2.scale.set(1.5, 1.5, 1.5);
+                    ball.scale.set(1.5, 1.5, 1.5);
+                } else {
+                    // Landscape mode
+                    camera.position.z = 600;
+                    gameField.scale.set(0.9, 0.9, 0.9);
+                    paddle1.scale.set(1, 1, 1);
+                    paddle2.scale.set(1, 1, 1);
+                    ball.scale.set(1, 1, 1);
+                }
             } else {
                 camera.position.z = 600;
+                gameField.scale.set(1, 1, 1);
+                paddle1.scale.set(1, 1, 1);
+                paddle2.scale.set(1, 1, 1);
+                ball.scale.set(1, 1, 1);
             }
+            
             updateInstructions();
         }
         
@@ -652,6 +733,13 @@
             paddle2.material.color.copy(paddleColor);
             topBoundary.material.color.copy(boundaryColor);
             bottomBoundary.material.color.copy(boundaryColor);
+            
+            // Update button color to match paddle color
+            const buttonRGB = paddleColor.clone().multiplyScalar(255);
+            document.getElementById('playAgain').style.background = 
+                `linear-gradient(145deg, 
+                rgb(${Math.min(255, buttonRGB.r + 30)}, ${Math.min(255, buttonRGB.g + 30)}, ${Math.min(255, buttonRGB.b + 30)}), 
+                rgb(${buttonRGB.r}, ${buttonRGB.g}, ${buttonRGB.b}))`;
             
             winMessageElement.style.display = 'none';
             gameActive = true;
