@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Pong Game - AI vs AI</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #score {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-size: 3rem;
+            font-weight: bold;
+            text-shadow: 0 0 10px rgba(255, 255, 255, 0.7);
+            pointer-events: none;
+            z-index: 100;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-size: 1rem;
+            pointer-events: none;
+            z-index: 100;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 8px 0;
+        }
+        #winMessage {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 20px 40px;
+            border-radius: 10px;
+            font-size: 2rem;
+            text-align: center;
+            display: none;
+            z-index: 200;
+        }
+        #winMessage button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 15px 32px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 10px 2px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="score">0 - 0</div>
+    <div id="instructions">AI vs AI Mode | Press SPACE to take control | ↑ ↓ Arrow keys or mouse to move</div>
+    <div id="winMessage">
+        <p id="winText"></p>
+        <button id="playAgain">Play Again</button>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Constants
+        const FIELD_WIDTH = 800;
+        const FIELD_HEIGHT = 500;
+        const FIELD_DEPTH = 20;
+        const BALL_SIZE = 20;
+        const PADDLE_WIDTH = 20;
+        const PADDLE_HEIGHT = 80;
+        const PADDLE_DEPTH = 20;
+        const BOUNDARY_THICKNESS = 20;
+        const INITIAL_BALL_SPEED_X = 5;
+        const INITIAL_BALL_SPEED_Y = 5;
+        const BALL_SPEED_INCREMENT = 0.2;
+        const PADDLE_SPEED = 7; 
+        const FLASH_DURATION = 10;
+        const WINNING_SCORE = 5;
+        const KEYBOARD_PADDLE_SPEED = 10;
+
+        // Game state variables
+        let ballColor, paddleColor, boundaryColor;
+        let ball_speed_x = INITIAL_BALL_SPEED_X;
+        let ball_speed_y = INITIAL_BALL_SPEED_Y;
+        let score_left = 0, score_right = 0;
+        let flash_counter_left = 0, flash_counter_right = 0;
+        let offset1 = 0, offset2 = 0;
+        let errorAccumulation1 = 0; // Error accumulation for left paddle
+        let errorAccumulation2 = 0; // Error accumulation for right paddle
+        let frameCount = 0;
+        let gameActive = true;
+        let lastTimestamp = 0;
+        let isMobile = window.innerWidth < 768;
+        let playerControlled = false; // Both paddles AI-controlled by default
+        let lastBounceTime = 0; // To prevent multiple bounces in a short time
+        
+        // Keyboard control
+        let keys = {
+            ArrowUp: false,
+            ArrowDown: false
+        };
+
+        // Three.js objects
+        let scene, camera, renderer;
+        let ball, paddle1, paddle2, topBoundary, bottomBoundary, gameField;
+        let particles = [];
+        let lights = [];
+        
+        // DOM elements
+        const scoreElement = document.getElementById('score');
+        const instructionsElement = document.getElementById('instructions');
+        const winMessageElement = document.getElementById('winMessage');
+        const winTextElement = document.getElementById('winText');
+        const playAgainButton = document.getElementById('playAgain');
+
+        // Initialize Three.js scene
+        function initScene() {
+            // Create scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111122);
+            
+            // Create camera (use perspective for 3D effect)
+            const aspectRatio = window.innerWidth / window.innerHeight;
+            camera = new THREE.PerspectiveCamera(60, aspectRatio, 0.1, 2000);
+            camera.position.set(0, 0, isMobile ? 700 : 600);
+            camera.lookAt(0, 0, 0);
+            
+            // Create renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+            
+            createLights();
+            createGameElements();
+            
+            // Event listeners
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            
+            if (isMobile) {
+                document.addEventListener('touchmove', onTouchMove, { passive: false });
+                document.addEventListener('touchstart', function(event) {
+                    togglePlayerControl();
+                });
+                updateInstructions();
+            } else {
+                document.addEventListener('mousemove', onMouseMove);
+            }
+            
+            playAgainButton.addEventListener('click', resetGame);
+        }
+        
+        function createLights() {
+            // Add ambient light
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+            scene.add(ambientLight);
+            
+            // Main directional light
+            const mainLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            mainLight.position.set(0, 200, 400);
+            mainLight.castShadow = true;
+            mainLight.shadow.camera.near = 0.1;
+            mainLight.shadow.camera.far = 1000;
+            mainLight.shadow.camera.left = -FIELD_WIDTH;
+            mainLight.shadow.camera.right = FIELD_WIDTH;
+            mainLight.shadow.camera.top = FIELD_HEIGHT;
+            mainLight.shadow.camera.bottom = -FIELD_HEIGHT;
+            mainLight.shadow.mapSize.width = 2048;
+            mainLight.shadow.mapSize.height = 2048;
+            scene.add(mainLight);
+            
+            // Spotlight to focus on the ball
+            const ballSpotlight = new THREE.SpotLight(0xffffff, 1);
+            ballSpotlight.position.set(0, 200, 200);
+            ballSpotlight.angle = Math.PI / 6;
+            ballSpotlight.penumbra = 0.5;
+            ballSpotlight.castShadow = true;
+            scene.add(ballSpotlight);
+            lights.push(ballSpotlight);
+            
+            // Add side lights for dramatic effect
+            const leftLight = new THREE.PointLight(0xff4444, 0.5);
+            leftLight.position.set(-FIELD_WIDTH/2 - 100, 0, 100);
+            scene.add(leftLight);
+            
+            const rightLight = new THREE.PointLight(0x4444ff, 0.5);
+            rightLight.position.set(FIELD_WIDTH/2 + 100, 0, 100);
+            scene.add(rightLight);
+        }
+        
+        function getRandomColor() {
+            return new THREE.Color(
+                Math.random(),
+                Math.random(),
+                Math.random()
+            );
+        }
+        
+        function createGameElements() {
+            // Initialize random colors
+            ballColor = getRandomColor();
+            paddleColor = getRandomColor();
+            boundaryColor = getRandomColor();
+            
+            // Create game field
+            const fieldGeometry = new THREE.BoxGeometry(FIELD_WIDTH, FIELD_HEIGHT, FIELD_DEPTH);
+            const fieldMaterial = new THREE.MeshPhongMaterial({
+                color: 0x003300,
+                transparent: true,
+                opacity: 0.2,
+                side: THREE.DoubleSide
+            });
+            gameField = new THREE.Mesh(fieldGeometry, fieldMaterial);
+            gameField.receiveShadow = true;
+            gameField.position.z = -FIELD_DEPTH/2;
+            scene.add(gameField);
+            
+            // Create boundaries
+            const boundaryMaterial = new THREE.MeshPhongMaterial({
+                color: boundaryColor,
+                specular: 0x222222,
+                shininess: 100
+            });
+            
+            // Top boundary
+            const topGeometry = new THREE.BoxGeometry(FIELD_WIDTH, BOUNDARY_THICKNESS, FIELD_DEPTH * 2);
+            topBoundary = new THREE.Mesh(topGeometry, boundaryMaterial);
+            topBoundary.position.y = FIELD_HEIGHT/2 + BOUNDARY_THICKNESS/2;
+            topBoundary.castShadow = true;
+            topBoundary.receiveShadow = true;
+            scene.add(topBoundary);
+            
+            // Bottom boundary
+            const bottomGeometry = new THREE.BoxGeometry(FIELD_WIDTH, BOUNDARY_THICKNESS, FIELD_DEPTH * 2);
+            bottomBoundary = new THREE.Mesh(bottomGeometry, boundaryMaterial);
+            bottomBoundary.position.y = -FIELD_HEIGHT/2 - BOUNDARY_THICKNESS/2;
+            bottomBoundary.castShadow = true;
+            bottomBoundary.receiveShadow = true;
+            scene.add(bottomBoundary);
+            
+            // Create paddles
+            const paddleMaterial = new THREE.MeshPhongMaterial({
+                color: paddleColor,
+                specular: 0xffffff,
+                shininess: 100
+            });
+            
+            // Left paddle
+            const paddle1Geometry = new THREE.BoxGeometry(PADDLE_WIDTH, PADDLE_HEIGHT, PADDLE_DEPTH);
+            paddle1 = new THREE.Mesh(paddle1Geometry, paddleMaterial.clone());
+            paddle1.position.x = -FIELD_WIDTH/2 + PADDLE_WIDTH/2;
+            paddle1.castShadow = true;
+            paddle1.receiveShadow = true;
+            scene.add(paddle1);
+            
+            // Right paddle
+            const paddle2Geometry = new THREE.BoxGeometry(PADDLE_WIDTH, PADDLE_HEIGHT, PADDLE_DEPTH);
+            paddle2 = new THREE.Mesh(paddle2Geometry, paddleMaterial.clone());
+            paddle2.position.x = FIELD_WIDTH/2 - PADDLE_WIDTH/2;
+            paddle2.castShadow = true;
+            paddle2.receiveShadow = true;
+            scene.add(paddle2);
+            
+            // Create ball
+            const ballGeometry = new THREE.SphereGeometry(BALL_SIZE/2, 32, 32);
+            const ballMaterial = new THREE.MeshPhongMaterial({
+                color: ballColor,
+                specular: 0xffffff,
+                shininess: 100,
+                emissive: ballColor,
+                emissiveIntensity: 0.5
+            });
+            ball = new THREE.Mesh(ballGeometry, ballMaterial);
+            ball.castShadow = true;
+            ball.receiveShadow = true;
+            scene.add(ball);
+            
+            // Center line
+            const centerLineGeometry = new THREE.BoxGeometry(2, FIELD_HEIGHT, FIELD_DEPTH/2);
+            const centerLineMaterial = new THREE.MeshBasicMaterial({
+                color: 0xffffff,
+                transparent: true,
+                opacity: 0.3
+            });
+            const centerLine = new THREE.Mesh(centerLineGeometry, centerLineMaterial);
+            centerLine.position.z = 1;
+            scene.add(centerLine);
+            
+            resetBall();
+        }
+        
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            
+            isMobile = window.innerWidth < 768;
+            if (isMobile) {
+                camera.position.z = 700;
+            } else {
+                camera.position.z = 600;
+            }
+            updateInstructions();
+        }
+        
+        function onKeyDown(event) {
+            if (event.code === 'Space') {
+                togglePlayerControl();
+            }
+            if (event.code === 'ArrowUp' || event.code === 'ArrowDown') {
+                keys[event.code] = true;
+                
+                // If not already player controlled, switch to player control
+                if (!playerControlled) {
+                    togglePlayerControl();
+                }
+            }
+        }
+        
+        function onKeyUp(event) {
+            if (event.code === 'ArrowUp' || event.code === 'ArrowDown') {
+                keys[event.code] = false;
+            }
+        }
+        
+        function togglePlayerControl() {
+            playerControlled = !playerControlled;
+            updateInstructions();
+        }
+        
+        function updateInstructions() {
+            if (playerControlled) {
+                if (isMobile) {
+                    instructionsElement.textContent = "Player vs AI Mode | Touch and drag to move your paddle";
+                } else {
+                    instructionsElement.textContent = "Player vs AI Mode | ↑ ↓ Arrow keys or mouse to move";
+                }
+            } else {
+                if (isMobile) {
+                    instructionsElement.textContent = "AI vs AI Mode | Tap screen to take control";
+                } else {
+                    instructionsElement.textContent = "AI vs AI Mode | Press SPACE to take control | ↑ ↓ Arrow keys or mouse to move";
+                }
+            }
+        }
+        
+        function onMouseMove(event) {
+            if (!playerControlled) return;
+            
+            const mouseY = (event.clientY / window.innerHeight) * 2 - 1;
+            paddle1.position.y = -mouseY * (FIELD_HEIGHT/2 - PADDLE_HEIGHT/2);
+            
+            // Keep paddle within bounds
+            if (paddle1.position.y > FIELD_HEIGHT/2 - PADDLE_HEIGHT/2) {
+                paddle1.position.y = FIELD_HEIGHT/2 - PADDLE_HEIGHT/2;
+            } else if (paddle1.position.y < -FIELD_HEIGHT/2 + PADDLE_HEIGHT/2) {
+                paddle1.position.y = -FIELD_HEIGHT/2 + PADDLE_HEIGHT/2;
+            }
+        }
+        
+        function onTouchMove(event) {
+            if (!playerControlled) return;
+            
+            event.preventDefault();
+            if (event.touches.length > 0) {
+                const touch = event.touches[0];
+                const touchY = (touch.clientY / window.innerHeight) * 2 - 1;
+                paddle1.position.y = -touchY * (FIELD_HEIGHT/2 - PADDLE_HEIGHT/2);
+                
+                // Keep paddle within bounds
+                if (paddle1.position.y > FIELD_HEIGHT/2 - PADDLE_HEIGHT/2) {
+                    paddle1.position.y = FIELD_HEIGHT/2 - PADDLE_HEIGHT/2;
+                } else if (paddle1.position.y < -FIELD_HEIGHT/2 + PADDLE_HEIGHT/2) {
+                    paddle1.position.y = -FIELD_HEIGHT/2 + PADDLE_HEIGHT/2;
+                }
+            }
+        }
+        
+        function updateGame(timestamp) {
+            if (!lastTimestamp) lastTimestamp = timestamp;
+            const deltaTime = (timestamp - lastTimestamp) / 16.67; // Normalize to ~60fps
+            lastTimestamp = timestamp;
+            
+            if (!gameActive) {
+                renderer.render(scene, camera);
+                requestAnimationFrame(updateGame);
+                return;
+            }
+            
+            // Keyboard paddle control
+            if (playerControlled) {
+                if (keys.ArrowUp) {
+                    paddle1.position.y += KEYBOARD_PADDLE_SPEED * deltaTime;
+                }
+                if (keys.ArrowDown) {
+                    paddle1.position.y -= KEYBOARD_PADDLE_SPEED * deltaTime;
+                }
+                
+                // Keep paddle within bounds
+                if (paddle1.position.y > FIELD_HEIGHT/2 - PADDLE_HEIGHT/2) {
+                    paddle1.position.y = FIELD_HEIGHT/2 - PADDLE_HEIGHT/2;
+                } else if (paddle1.position.y < -FIELD_HEIGHT/2 + PADDLE_HEIGHT/2) {
+                    paddle1.position.y = -FIELD_HEIGHT/2 + PADDLE_HEIGHT/2;
+                }
+            }
+            
+            // Store previous position for collision detection
+            const prevY = ball.position.y;
+            
+            // Update ball position
+            ball.position.x += ball_speed_x * deltaTime;
+            ball.position.y += ball_speed_y * deltaTime;
+            
+            // Ball rotation for added effect
+            ball.rotation.x += 0.02 * deltaTime;
+            ball.rotation.z += 0.03 * deltaTime;
+            
+            // Update spotlight to follow ball
+            if (lights[0]) {
+                lights[0].position.x = ball.position.x;
+                lights[0].position.y = ball.position.y + 100;
+                lights[0].target = ball;
+            }
+            
+            // Improved ball collision with top/bottom boundaries
+            // Using the ball's position and the boundaries' positions
+            const topBoundaryBottom = FIELD_HEIGHT/2;
+            const bottomBoundaryTop = -FIELD_HEIGHT/2;
+            
+            // Check if the ball is moving towards the boundary before applying bounce
+            if ((ball.position.y + BALL_SIZE/2 >= topBoundaryBottom && ball_speed_y > 0) ||
+                (ball.position.y - BALL_SIZE/2 <= bottomBoundaryTop && ball_speed_y < 0)) {
+                
+                // Prevent double bouncing in the same frame
+                const currentTime = timestamp;
+                if (currentTime - lastBounceTime > 50) { // 50ms debounce time
+                    ball_speed_y *= -1;
+                    createParticleExplosion(ball.position.x, ball.position.y, 0, 10);
+                    playSound(220, 0.1);
+                    lastBounceTime = currentTime;
+                    
+                    // Make sure ball is not stuck in the boundary
+                    if (ball.position.y + BALL_SIZE/2 > topBoundaryBottom) {
+                        ball.position.y = topBoundaryBottom - BALL_SIZE/2;
+                    } else if (ball.position.y - BALL_SIZE/2 < bottomBoundaryTop) {
+                        ball.position.y = bottomBoundaryTop + BALL_SIZE/2;
+                    }
+                }
+            }
+            
+            // Ball collision with paddles
+            if (ball.position.x - BALL_SIZE/2 <= -FIELD_WIDTH/2 + PADDLE_WIDTH &&
+                ball.position.y >= paddle1.position.y - PADDLE_HEIGHT/2 &&
+                ball.position.y <= paddle1.position.y + PADDLE_HEIGHT/2 &&
+                ball_speed_x < 0) { // Only bounce if moving towards the paddle
+                
+                ball_speed_x = Math.abs(ball_speed_x) + BALL_SPEED_INCREMENT;
+                createParticleExplosion(ball.position.x, ball.position.y, 0, 20);
+                flash_counter_left = FLASH_DURATION;
+                
+                // Play sound
+                playSound(330, 0.2);
+                
+                // Adjust ball direction based on where it hit the paddle
+                const hitPosition = (ball.position.y - paddle1.position.y) / (PADDLE_HEIGHT/2);
+                ball_speed_y = hitPosition * 10;
+                
+                // Make sure ball is not stuck in the paddle
+                ball.position.x = -FIELD_WIDTH/2 + PADDLE_WIDTH + BALL_SIZE/2;
+                
+            } else if (ball.position.x + BALL_SIZE/2 >= FIELD_WIDTH/2 - PADDLE_WIDTH &&
+                      ball.position.y >= paddle2.position.y - PADDLE_HEIGHT/2 &&
+                      ball.position.y <= paddle2.position.y + PADDLE_HEIGHT/2 &&
+                      ball_speed_x > 0) { // Only bounce if moving towards the paddle
+                
+                ball_speed_x = -Math.abs(ball_speed_x) - BALL_SPEED_INCREMENT;
+                createParticleExplosion(ball.position.x, ball.position.y, 0, 20);
+                flash_counter_right = FLASH_DURATION;
+                
+                // Play sound
+                playSound(440, 0.2);
+                
+                // Adjust ball direction based on where it hit the paddle
+                const hitPosition = (ball.position.y - paddle2.position.y) / (PADDLE_HEIGHT/2);
+                ball_speed_y = hitPosition * 10;
+                
+                // Make sure ball is not stuck in the paddle
+                ball.position.x = FIELD_WIDTH/2 - PADDLE_WIDTH - BALL_SIZE/2;
+            }
+            
+            // Update AI paddles
+            updateAIPaddles(deltaTime);
+            
+            // Update randomness every 30 frames
+            if (frameCount % 30 === 0) {
+                offset1 = Math.random() * 40 - 20;
+                offset2 = Math.random() * 40 - 20;
+                
+                // Gradually increase error accumulation over time
+                errorAccumulation1 += Math.random() * 0.5;
+                errorAccumulation2 += Math.random() * 0.5;
+            }
+            frameCount++;
+            
+            // Check scores and reset if needed
+            if (ball.position.x < -FIELD_WIDTH/2 - BALL_SIZE) {
+                // Right player scores
+                score_right++;
+                scoreElement.textContent = `${score_left} - ${score_right}`;
+                createParticleExplosion(ball.position.x, ball.position.y, 0, 50);
+                playSound(175, 0.3);
+                
+                if (score_right >= WINNING_SCORE) {
+                    if (playerControlled) {
+                        endGame("AI Wins!");
+                    } else {
+                        // In AI vs AI mode, just restart the game
+                        flashScreen();
+                        resetGame();
+                    }
+                } else {
+                    flashScreen();
+                    resetBall();
+                }
+            } else if (ball.position.x > FIELD_WIDTH/2 + BALL_SIZE) {
+                // Left player scores
+                score_left++;
+                scoreElement.textContent = `${score_left} - ${score_right}`;
+                createParticleExplosion(ball.position.x, ball.position.y, 0, 50);
+                playSound(146.83, 0.3);
+                
+                if (score_left >= WINNING_SCORE) {
+                    if (playerControlled) {
+                        endGame("You Win!");
+                    } else {
+                        // In AI vs AI mode, just restart the game
+                        flashScreen();
+                        resetGame();
+                    }
+                } else {
+                    flashScreen();
+                    resetBall();
+                }
+            }
+            
+            // Update flash counters
+            if (flash_counter_left > 0) {
+                flash_counter_left--;
+                paddle1.material.color.setRGB(1, 0, 0);
+            } else {
+                paddle1.material.color.copy(paddleColor);
+            }
+            
+            if (flash_counter_right > 0) {
+                flash_counter_right--;
+                paddle2.material.color.setRGB(1, 0, 0);
+            } else {
+                paddle2.material.color.copy(paddleColor);
+            }
+            
+            // Update particles
+            updateParticles(deltaTime);
+            
+            renderer.render(scene, camera);
+            requestAnimationFrame(updateGame);
+        }
+        
+        function updateAIPaddles(deltaTime) {
+            // Left paddle AI (only if not player controlled)
+            if (!playerControlled && ball_speed_x < 0) {
+                const targetY = ball.position.y + offset1;
+                // Apply error accumulation
+                const errorOffset = Math.sin(frameCount * 0.01) * errorAccumulation1;
+                const actualTarget = targetY + errorOffset;
+                
+                moveAIPaddle(paddle1, actualTarget, deltaTime);
+            }
+            
+            // Right paddle AI
+            if (ball_speed_x > 0) {
+                const targetY = ball.position.y + offset2;
+                // Apply error accumulation
+                const errorOffset = Math.sin(frameCount * 0.01) * errorAccumulation2;
+                const actualTarget = targetY + errorOffset;
+                
+                moveAIPaddle(paddle2, actualTarget, deltaTime);
+            }
+        }
+        
+        function moveAIPaddle(paddle, targetY, deltaTime) {
+            // Move the paddle toward the target at limited speed
+            if (paddle.position.y < targetY - PADDLE_SPEED/2) {
+                paddle.position.y += PADDLE_SPEED * deltaTime;
+            } else if (paddle.position.y > targetY + PADDLE_SPEED/2) {
+                paddle.position.y -= PADDLE_SPEED * deltaTime;
+            }
+            
+            // Keep paddle within bounds
+            if (paddle.position.y > FIELD_HEIGHT/2 - PADDLE_HEIGHT/2) {
+                paddle.position.y = FIELD_HEIGHT/2 - PADDLE_HEIGHT/2;
+            } else if (paddle.position.y < -FIELD_HEIGHT/2 + PADDLE_HEIGHT/2) {
+                paddle.position.y = -FIELD_HEIGHT/2 + PADDLE_HEIGHT/2;
+            }
+        }
+        
+        function resetBall() {
+            ball.position.set(0, 0, 0);
+            
+            // Choose random direction
+            const directionX = Math.random() > 0.5 ? 1 : -1;
+            const directionY = Math.random() > 0.5 ? 1 : -1;
+            
+            ball_speed_x = INITIAL_BALL_SPEED_X * directionX;
+            ball_speed_y = INITIAL_BALL_SPEED_Y * directionY;
+        }
+        
+        function resetGame() {
+            resetBall();
+            score_left = 0;
+            score_right = 0;
+            scoreElement.textContent = `${score_left} - ${score_right}`;
+            frameCount = 0;
+            errorAccumulation1 = 0;
+            errorAccumulation2 = 0;
+            
+            // Randomize colors
+            ballColor = getRandomColor();
+            paddleColor = getRandomColor();
+            boundaryColor = getRandomColor();
+            
+            ball.material.color.copy(ballColor);
+            ball.material.emissive.copy(ballColor);
+            paddle1.material.color.copy(paddleColor);
+            paddle2.material.color.copy(paddleColor);
+            topBoundary.material.color.copy(boundaryColor);
+            bottomBoundary.material.color.copy(boundaryColor);
+            
+            winMessageElement.style.display = 'none';
+            gameActive = true;
+        }
+        
+        function flashScreen() {
+            const originalColor = scene.background.clone();
+            scene.background = new THREE.Color(Math.random(), Math.random(), Math.random());
+            
+            setTimeout(() => {
+                scene.background = originalColor;
+            }, 100);
+        }
+        
+        function endGame(message) {
+            winTextElement.textContent = message;
+            winMessageElement.style.display = 'block';
+            gameActive = false;
+        }
+        
+        function createParticleExplosion(x, y, z, count) {
+            const particleGeometry = new THREE.SphereGeometry(2, 8, 8);
+            const particleMaterial = new THREE.MeshBasicMaterial({
+                color: getRandomColor(),
+                transparent: true,
+                opacity: 1
+            });
+            
+            for (let i = 0; i < count; i++) {
+                const particle = new THREE.Mesh(particleGeometry, particleMaterial.clone());
+                particle.position.set(x, y, z);
+                
+                particle.velocity = {
+                    x: (Math.random() - 0.5) * 10,
+                    y: (Math.random() - 0.5) * 10,
+                    z: (Math.random() - 0.5) * 10
+                };
+                
+                particle.life = 30; // Frames the particle will live
+                scene.add(particle);
+                particles.push(particle);
+            }
+        }
+        
+        function updateParticles(deltaTime) {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const particle = particles[i];
+                
+                particle.position.x += particle.velocity.x * deltaTime * 0.5;
+                particle.position.y += particle.velocity.y * deltaTime * 0.5;
+                particle.position.z += particle.velocity.z * deltaTime * 0.5;
+                
+                particle.life -= deltaTime;
+                particle.material.opacity = particle.life / 30;
+                
+                if (particle.life <= 0) {
+                    scene.remove(particle);
+                    particles.splice(i, 1);
+                }
+            }
+        }
+        
+        function playSound(frequency, duration) {
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.type = 'sine';
+                oscillator.frequency.value = frequency;
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                
+                gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+                
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + duration);
+            } catch (e) {
+                // Silently fail if audio context isn't available
+                console.log("Audio not available", e);
+            }
+        }
+        
+        // Initialize and start the game
+        initScene();
+        requestAnimationFrame(updateGame);
+    </script>
+</body>
+</html>
