@@ -9,7 +9,7 @@
             margin: 0;
             overflow: hidden;
             background-color: #000;
-            font-family: "Roboto Mono", monospace;
+            font-family: Arial, sans-serif;
         }
         canvas {
             display: block;
@@ -37,6 +37,16 @@
             z-index: 100;
             background-color: rgba(0, 0, 0, 0.5);
             padding: 8px 0;
+        }
+        #cameraControls {
+            position: absolute;
+            top: 60px;
+            width: 100%;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 0.9rem;
+            pointer-events: none;
+            z-index: 100;
         }
         #winMessage {
             position: absolute;
@@ -112,7 +122,7 @@
 </head>
 <body>
     <div id="score">0 - 0</div>
-    <div id="instructions">AI vs AI Mode | Press SPACE to take control | ↑ ↓ Arrow keys or mouse to move</div>
+    <div id="instructions">AI vs AI Mode | Press SPACE to take control | ↑ ↓ ← → Arrow keys or mouse to move</div>
     <div id="winMessage">
         <p id="winText"></p>
         <button id="playAgain">PLAY AGAIN</button>
@@ -156,8 +166,31 @@
         // Keyboard control
         let keys = {
             ArrowUp: false,
-            ArrowDown: false
+            ArrowDown: false,
+            ArrowLeft: false,
+            ArrowRight: false,
+            KeyW: false,
+            KeyA: false,
+            KeyS: false,
+            KeyD: false,
+            KeyQ: false,
+            KeyE: false,
+            KeyZ: false,
+            KeyX: false
         };
+        
+        // Camera control
+        let cameraRotation = {
+            x: 0,
+            y: 0,
+            z: 0  // Roll rotation around camera's own x-axis
+        };
+        
+        let cameraDistance = 600;
+        let defaultCameraPosition = { x: 0, y: 0, z: 600 };
+        let cameraMode = "orbit"; // "orbit", "parallel", "leftPaddle", "rightPaddle"
+        let paddleViewOffset = 100; // Distance behind the paddle for paddle view
+        let paddleViewHeight = 50;  // Height offset for better visibility
 
         // Three.js objects
         let scene, camera, renderer;
@@ -217,6 +250,9 @@
             }
             
             playAgainButton.addEventListener('click', resetGame);
+            
+            // Call updateCameraPosition once at initialization
+            updateCameraPosition();
         }
         
         function createLights() {
@@ -377,7 +413,7 @@
             if (isMobile) {
                 if (window.innerHeight > window.innerWidth) {
                     // Portrait mode
-                    camera.position.z = 1000;
+                    cameraDistance = 1000;
                     // Scale down the game field for portrait mode
                     gameField.scale.set(0.7, 0.7, 0.7);
                     paddle1.scale.set(1.5, 1.5, 1.5);
@@ -385,20 +421,21 @@
                     ball.scale.set(1.5, 1.5, 1.5);
                 } else {
                     // Landscape mode
-                    camera.position.z = 600;
+                    cameraDistance = 600;
                     gameField.scale.set(0.9, 0.9, 0.9);
                     paddle1.scale.set(1, 1, 1);
                     paddle2.scale.set(1, 1, 1);
                     ball.scale.set(1, 1, 1);
                 }
             } else {
-                camera.position.z = 600;
+                cameraDistance = 600;
                 gameField.scale.set(1, 1, 1);
                 paddle1.scale.set(1, 1, 1);
                 paddle2.scale.set(1, 1, 1);
                 ball.scale.set(1, 1, 1);
             }
             
+            updateCameraPosition();
             updateInstructions();
         }
         
@@ -406,7 +443,7 @@
             if (event.code === 'Space') {
                 togglePlayerControl();
             }
-            if (event.code === 'ArrowUp' || event.code === 'ArrowDown') {
+            if (event.code === 'ArrowUp' || event.code === 'ArrowDown' || event.code === 'ArrowLeft' || event.code === 'ArrowRight') {
                 keys[event.code] = true;
                 
                 // If not already player controlled, switch to player control
@@ -414,11 +451,247 @@
                     togglePlayerControl();
                 }
             }
+            
+            // Camera controls
+            if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'KeyZ', 'KeyX'].includes(event.code)) {
+                keys[event.code] = true;
+            }
+            
+            // Reset camera position with R key
+            if (event.code === 'KeyR') {
+                resetCameraPosition();
+            }
+            
+            // Camera mode switching
+            if (event.code === 'Digit1') {
+                cameraMode = "orbit";
+                updateCameraPosition();
+            } else if (event.code === 'Digit2') {
+                cameraMode = "parallel";
+                updateCameraPosition();
+            } else if (event.code === 'Digit3') {
+                cameraMode = "leftPaddle";
+                updateCameraPosition();
+            } else if (event.code === 'Digit4') {
+                cameraMode = "rightPaddle";
+                updateCameraPosition();
+            }
         }
         
         function onKeyUp(event) {
-            if (event.code === 'ArrowUp' || event.code === 'ArrowDown') {
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'KeyZ', 'KeyX'].includes(event.code)) {
                 keys[event.code] = false;
+            }
+        }
+        
+        function resetCameraPosition() {
+            cameraRotation.x = 0;
+            cameraRotation.y = 0;
+            cameraRotation.z = 0; // Reset roll rotation
+            cameraDistance = isMobile && window.innerHeight > window.innerWidth ? 1000 : 600;
+            updateCameraPosition();
+        }
+        
+        function updateCameraPosition() {
+            // Reset camera orientation first
+            camera.up.set(0, 1, 0);
+            
+            switch (cameraMode) {
+                case "leftPaddle":
+                    // Position camera behind left paddle with better visibility
+                    camera.position.x = paddle1.position.x - paddleViewOffset;
+                    camera.position.y = paddle1.position.y + paddleViewHeight;
+                    camera.position.z = 100; // Offset in Z axis for better perspective
+                    
+                    // Look at a point slightly in front of the paddle toward the field center
+                    camera.lookAt(
+                        paddle1.position.x + 100, // Look ahead of the paddle
+                        paddle1.position.y, 
+                        0
+                    );
+                    
+                    // Apply roll rotation around camera's local Z axis
+                    if (cameraRotation.z !== 0) {
+                        camera.rotateZ(cameraRotation.z);
+                    }
+                    break;
+                    
+                case "rightPaddle":
+                    // Position camera behind right paddle with better visibility
+                    camera.position.x = paddle2.position.x + paddleViewOffset;
+                    camera.position.y = paddle2.position.y + paddleViewHeight;
+                    camera.position.z = 100; // Offset in Z axis for better perspective
+                    
+                    // Look at a point slightly in front of the paddle toward the field center
+                    camera.lookAt(
+                        paddle2.position.x - 100, // Look ahead of the paddle 
+                        paddle2.position.y, 
+                        0
+                    );
+                    
+                    // Apply roll rotation around camera's local Z axis
+                    if (cameraRotation.z !== 0) {
+                        camera.rotateZ(cameraRotation.z);
+                    }
+                    break;
+                    
+                case "parallel":
+                    // Calculate distance based on device
+                    const distanceParallel = isMobile && window.innerHeight > window.innerWidth ? 1000 : cameraDistance;
+                    
+                    // Calculate position using spherical coordinates
+                    camera.position.x = distanceParallel * Math.sin(cameraRotation.y) * Math.cos(cameraRotation.x);
+                    camera.position.z = distanceParallel * Math.cos(cameraRotation.y) * Math.cos(cameraRotation.x);
+                    camera.position.y = distanceParallel * Math.sin(cameraRotation.x);
+                    
+                    // Create a direction vector pointing along global Z-axis
+                    const direction = new THREE.Vector3(0, 0, -1);
+                    
+                    // Rotate the direction vector based on our horizontal rotation (y)
+                    direction.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraRotation.y);
+                    
+                    // Calculate lookAt point by extending the direction from camera position
+                    const lookAtPoint = new THREE.Vector3();
+                    lookAtPoint.copy(camera.position).add(direction.multiplyScalar(100));
+                    
+                    // Point camera at this point
+                    camera.lookAt(lookAtPoint);
+                    
+                    // Now apply vertical rotation (x) by rotating around local X axis
+                    camera.rotateX(cameraRotation.x);
+                    
+                    // Apply roll rotation around camera's local Z axis
+                    if (cameraRotation.z !== 0) {
+                        camera.rotateZ(cameraRotation.z);
+                    }
+                    break;
+                    
+                case "orbit":
+                default:
+                    // Calculate distance based on device
+                    const distance = isMobile && window.innerHeight > window.innerWidth ? 1000 : cameraDistance;
+                    
+                    // Calculate position using spherical coordinates
+                    camera.position.x = distance * Math.sin(cameraRotation.y) * Math.cos(cameraRotation.x);
+                    camera.position.z = distance * Math.cos(cameraRotation.y) * Math.cos(cameraRotation.x);
+                    camera.position.y = distance * Math.sin(cameraRotation.x);
+                    
+                    // Original orbit camera mode - always look at center
+                    camera.lookAt(0, 0, 0);
+                    
+                    // Apply roll rotation around camera's local Z axis
+                    if (cameraRotation.z !== 0) {
+                        camera.rotateZ(cameraRotation.z);
+                    }
+                    break;
+            }
+        }
+        
+        function updateCamera(deltaTime) {
+            const rotationSpeed = 0.03 * deltaTime;
+            const zoomSpeed = 10 * deltaTime;
+            let changed = false;
+            
+            // Roll rotation (Z/X) - available in all camera modes
+            if (keys.KeyZ) {
+                cameraRotation.z += rotationSpeed;
+                changed = true;
+            }
+            if (keys.KeyX) {
+                cameraRotation.z -= rotationSpeed;
+                changed = true;
+            }
+            
+            // Limit roll rotation to prevent disorientation
+            cameraRotation.z = Math.max(-Math.PI, Math.min(Math.PI, cameraRotation.z));
+            
+            // Only apply these controls for orbit and parallel modes
+            if (cameraMode === "orbit" || cameraMode === "parallel") {
+                // Vertical rotation (W/S)
+                if (keys.KeyW) {
+                    if (cameraMode === "parallel") {
+                        // In parallel view, W/S control pitch (rotation around local X axis)
+                        cameraRotation.x -= rotationSpeed; // Inverted for intuitive control
+                    } else {
+                        cameraRotation.x += rotationSpeed;
+                    }
+                    changed = true;
+                }
+                if (keys.KeyS) {
+                    if (cameraMode === "parallel") {
+                        cameraRotation.x += rotationSpeed; // Inverted for intuitive control
+                    } else {
+                        cameraRotation.x -= rotationSpeed;
+                    }
+                    changed = true;
+                }
+                
+                // Horizontal rotation (A/D)
+                if (keys.KeyA) {
+                    cameraRotation.y += rotationSpeed;
+                    changed = true;
+                }
+                if (keys.KeyD) {
+                    cameraRotation.y -= rotationSpeed;
+                    changed = true;
+                }
+                
+                // Zoom in/out (Q/E)
+                if (keys.KeyQ) {
+                    cameraDistance -= zoomSpeed;
+                    changed = true;
+                }
+                if (keys.KeyE) {
+                    cameraDistance += zoomSpeed;
+                    changed = true;
+                }
+                
+                // Limit the vertical rotation 
+                if (cameraMode === "parallel") {
+                    // In parallel view, limit pitch to avoid flipping
+                    cameraRotation.x = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, cameraRotation.x));
+                } else {
+                    // In orbit view, limit elevation angle
+                    cameraRotation.x = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, cameraRotation.x));
+                }
+                
+                // Limit zoom range
+                cameraDistance = Math.max(100, Math.min(1200, cameraDistance));
+            } else if (cameraMode === "leftPaddle" || cameraMode === "rightPaddle") {
+                // Additional controls for paddle view
+                
+                // Allow fine-tuning of height with W/S keys 
+                if (keys.KeyW) {
+                    paddleViewHeight += 2 * deltaTime;
+                    changed = true;
+                }
+                if (keys.KeyS) {
+                    paddleViewHeight -= 2 * deltaTime;
+                    changed = true;
+                }
+                
+                // Allow fine-tuning of distance with Q/E keys
+                if (keys.KeyQ) {
+                    paddleViewOffset -= 2 * deltaTime;
+                    changed = true;
+                }
+                if (keys.KeyE) {
+                    paddleViewOffset += 2 * deltaTime;
+                    changed = true;
+                }
+                
+                // Limit height and offset to reasonable values
+                paddleViewHeight = Math.max(0, Math.min(200, paddleViewHeight));
+                paddleViewOffset = Math.max(50, Math.min(200, paddleViewOffset));
+            }
+            
+            // For paddle views, we always need to update camera position to follow the paddle
+            if (cameraMode === "leftPaddle" || cameraMode === "rightPaddle") {
+                changed = true;
+            }
+            
+            if (changed) {
+                updateCameraPosition();
             }
         }
         
@@ -428,19 +701,24 @@
         }
         
         function updateInstructions() {
+            let controlText = "";
+            
             if (playerControlled) {
                 if (isMobile) {
-                    instructionsElement.textContent = "Player vs AI Mode | Touch and drag to move your paddle";
+                    controlText = "Player vs AI Mode | Touch and drag to move your paddle";
                 } else {
-                    instructionsElement.textContent = "Player vs AI Mode | ↑ ↓ Arrow keys or mouse to move";
+                    controlText = "Player vs AI Mode | ↑ ↓ ← → Arrow keys or mouse to move";
                 }
             } else {
                 if (isMobile) {
-                    instructionsElement.textContent = "AI vs AI Mode | Tap screen to take control";
+                    controlText = "AI vs AI Mode | Tap screen to take control";
                 } else {
-                    instructionsElement.textContent = "AI vs AI Mode | Press SPACE to take control | ↑ ↓ Arrow keys or mouse to move";
+                    controlText = "AI vs AI Mode | Press SPACE to take control | ↑ ↓ ← → Arrow keys or mouse to move";
                 }
             }
+            
+            controlText += " | Camera modes: 1-Orbit, 2-Parallel, 3-Left Paddle, 4-Right Paddle | Z/X for camera roll";
+            instructionsElement.textContent = controlText;
         }
         
         function onMouseMove(event) {
@@ -480,6 +758,9 @@
             const deltaTime = (timestamp - lastTimestamp) / 16.67; // Normalize to ~60fps
             lastTimestamp = timestamp;
             
+            // Update camera based on key presses
+            updateCamera(deltaTime);
+            
             if (!gameActive) {
                 renderer.render(scene, camera);
                 requestAnimationFrame(updateGame);
@@ -488,10 +769,10 @@
             
             // Keyboard paddle control
             if (playerControlled) {
-                if (keys.ArrowUp) {
+                if (keys.ArrowUp || keys.ArrowLeft) {
                     paddle1.position.y += KEYBOARD_PADDLE_SPEED * deltaTime;
                 }
-                if (keys.ArrowDown) {
+                if (keys.ArrowDown || keys.ArrowRight) {
                     paddle1.position.y -= KEYBOARD_PADDLE_SPEED * deltaTime;
                 }
                 
