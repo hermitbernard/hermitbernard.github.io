@@ -146,6 +146,12 @@
         const FLASH_DURATION = 10;
         const WINNING_SCORE = 5;
         const KEYBOARD_PADDLE_SPEED = 10;
+        
+        // AI difficulty (0.0 to 1.0) - Higher means better AI
+        // 0.0 = Very bad AI (will miss most balls)
+        // 0.5 = Decent AI (will miss sometimes)
+        // 1.0 = Perfect AI (will rarely miss)
+        const AI_DIFFICULTY = 0.7;
 
         // Game state variables
         let ballColor, paddleColor, boundaryColor;
@@ -162,6 +168,14 @@
         let isMobile = window.innerWidth < 768;
         let playerControlled = false; // Both paddles AI-controlled by default
         let lastBounceTime = 0; // To prevent multiple bounces in a short time
+        
+        // Add smoothing variables for paddle movement
+        let smoothedErrorOffset1 = 0;
+        let smoothedErrorOffset2 = 0;
+        let targetPaddle1Y = 0;
+        let targetPaddle2Y = 0;
+        let currentTargetP1 = 0;
+        let currentTargetP2 = 0;
         
         // Keyboard control
         let keys = {
@@ -465,15 +479,25 @@
             // Camera mode switching
             if (event.code === 'Digit1') {
                 cameraMode = "orbit";
+                cameraRotation.x = 0;
+                cameraRotation.y = 0;
+                cameraRotation.z = 0;
                 updateCameraPosition();
             } else if (event.code === 'Digit2') {
                 cameraMode = "parallel";
+                cameraRotation.x = 0;
+                cameraRotation.y = 0;
+                cameraRotation.z = 0;
                 updateCameraPosition();
             } else if (event.code === 'Digit3') {
                 cameraMode = "leftPaddle";
+                cameraRotation.x = Math.PI/2 - 0.1; // Max S press
+                cameraRotation.z = -Math.PI/2;      // 90 degrees roll (as if pressing X)
                 updateCameraPosition();
             } else if (event.code === 'Digit4') {
                 cameraMode = "rightPaddle";
+                cameraRotation.x = Math.PI/2 - 0.1; // Max S press
+                cameraRotation.y = -Math.PI/2;       // 90 degrees Y rotation
                 updateCameraPosition();
             }
         }
@@ -873,12 +897,20 @@
             
             // Update randomness every 30 frames
             if (frameCount % 30 === 0) {
-                offset1 = Math.random() * 40 - 20;
-                offset2 = Math.random() * 40 - 20;
+                // Scale random offset range by inverse of AI difficulty
+                const offsetRange = 30 * (2 - AI_DIFFICULTY);
+                offset1 = Math.random() * offsetRange - (offsetRange/2);
+                offset2 = Math.random() * offsetRange - (offsetRange/2);
                 
-                // Gradually increase error accumulation over time
-                errorAccumulation1 += Math.random() * 0.5;
-                errorAccumulation2 += Math.random() * 0.5;
+                // Gradually increase error accumulation over time, scaled by inverse of AI difficulty
+                const errorIncrease = 0.3 * (2 - AI_DIFFICULTY);
+                errorAccumulation1 += Math.random() * errorIncrease;
+                errorAccumulation2 += Math.random() * errorIncrease;
+                
+                // Cap error accumulation based on AI difficulty
+                const maxError = 20 * (2 - AI_DIFFICULTY);
+                errorAccumulation1 = Math.min(errorAccumulation1, maxError);
+                errorAccumulation2 = Math.min(errorAccumulation2, maxError);
             }
             frameCount++;
             
@@ -948,31 +980,85 @@
         function updateAIPaddles(deltaTime) {
             // Left paddle AI (only if not player controlled)
             if (!playerControlled && ball_speed_x < 0) {
-                const targetY = ball.position.y + offset1;
-                // Apply error accumulation
-                const errorOffset = Math.sin(frameCount * 0.01) * errorAccumulation1;
-                const actualTarget = targetY + errorOffset;
+                // Base target position (where the ball is)
+                const baseTargetY = ball.position.y;
                 
-                moveAIPaddle(paddle1, actualTarget, deltaTime);
+                // Add a simple prediction based on ball velocity and AI difficulty
+                const predictionFactor = 8 * AI_DIFFICULTY; // Reduce prediction accuracy for lower difficulty
+                const predictedY = baseTargetY + (ball_speed_y * predictionFactor);
+                
+                // Calculate error with smoother sin wave (slower frequency)
+                // Reduce the error impact as ball gets closer to make AI more accurate when it matters
+                const distanceFromPaddle = Math.abs(ball.position.x - paddle1.position.x);
+                const errorFactor = Math.min(1, distanceFromPaddle / (FIELD_WIDTH * 0.4)) * (2 - AI_DIFFICULTY);
+                const errorOffset = Math.sin(frameCount * 0.005) * errorAccumulation1 * errorFactor;
+                
+                // Smooth the error offset over time
+                const errorSmoothingFactor = 0.1 * AI_DIFFICULTY;
+                smoothedErrorOffset1 = lerp(smoothedErrorOffset1, errorOffset, errorSmoothingFactor * deltaTime);
+                
+                // Current target is base position + static offset + smoothed dynamic error
+                currentTargetP1 = predictedY + offset1 * errorFactor + smoothedErrorOffset1;
+                
+                // Smooth the paddle movement target, faster response when ball is closer
+                const baseLerpFactor = 0.1 * AI_DIFFICULTY;
+                const maxLerpFactor = 0.3 * AI_DIFFICULTY;
+                const lerpFactor = Math.min(maxLerpFactor, baseLerpFactor + (1 - distanceFromPaddle / FIELD_WIDTH) * 0.4);
+                targetPaddle1Y = lerp(targetPaddle1Y, currentTargetP1, lerpFactor * deltaTime);
+                
+                moveAIPaddle(paddle1, targetPaddle1Y, deltaTime);
             }
             
             // Right paddle AI
             if (ball_speed_x > 0) {
-                const targetY = ball.position.y + offset2;
-                // Apply error accumulation
-                const errorOffset = Math.sin(frameCount * 0.01) * errorAccumulation2;
-                const actualTarget = targetY + errorOffset;
+                // Base target position (where the ball is)
+                const baseTargetY = ball.position.y;
                 
-                moveAIPaddle(paddle2, actualTarget, deltaTime);
+                // Add a simple prediction based on ball velocity and AI difficulty
+                const predictionFactor = 8 * AI_DIFFICULTY; // Reduce prediction accuracy for lower difficulty
+                const predictedY = baseTargetY + (ball_speed_y * predictionFactor);
+                
+                // Calculate error with smoother sin wave (slower frequency)
+                // Reduce the error impact as ball gets closer to make AI more accurate when it matters
+                const distanceFromPaddle = Math.abs(ball.position.x - paddle2.position.x);
+                const errorFactor = Math.min(1, distanceFromPaddle / (FIELD_WIDTH * 0.4)) * (2 - AI_DIFFICULTY);
+                const errorOffset = Math.sin(frameCount * 0.005) * errorAccumulation2 * errorFactor;
+                
+                // Smooth the error offset over time
+                const errorSmoothingFactor = 0.1 * AI_DIFFICULTY;
+                smoothedErrorOffset2 = lerp(smoothedErrorOffset2, errorOffset, errorSmoothingFactor * deltaTime);
+                
+                // Current target is base position + static offset + smoothed dynamic error
+                currentTargetP2 = predictedY + offset2 * errorFactor + smoothedErrorOffset2;
+                
+                // Smooth the paddle movement target, faster response when ball is closer
+                const baseLerpFactor = 0.1 * AI_DIFFICULTY;
+                const maxLerpFactor = 0.3 * AI_DIFFICULTY;
+                const lerpFactor = Math.min(maxLerpFactor, baseLerpFactor + (1 - distanceFromPaddle / FIELD_WIDTH) * 0.4);
+                targetPaddle2Y = lerp(targetPaddle2Y, currentTargetP2, lerpFactor * deltaTime);
+                
+                moveAIPaddle(paddle2, targetPaddle2Y, deltaTime);
             }
         }
         
+        // Linear interpolation helper function
+        function lerp(start, end, amount) {
+            return start + (end - start) * amount;
+        }
+        
         function moveAIPaddle(paddle, targetY, deltaTime) {
-            // Move the paddle toward the target at limited speed
-            if (paddle.position.y < targetY - PADDLE_SPEED/2) {
-                paddle.position.y += PADDLE_SPEED * deltaTime;
-            } else if (paddle.position.y > targetY + PADDLE_SPEED/2) {
-                paddle.position.y -= PADDLE_SPEED * deltaTime;
+            // Calculate distance to target
+            const distance = targetY - paddle.position.y;
+            
+            // Apply smooth movement with variable speed based on distance and AI difficulty
+            // Faster when far, slower when close, but with higher base speed
+            const maxSpeedFactor = 1.5 * AI_DIFFICULTY;
+            const speedFactor = Math.min(maxSpeedFactor, Math.abs(distance) / (30 / AI_DIFFICULTY));
+            const moveAmount = PADDLE_SPEED * speedFactor * deltaTime;
+            
+            // Move toward target with dampening as we get closer
+            if (Math.abs(distance) > 0.5) {
+                paddle.position.y += Math.sign(distance) * moveAmount;
             }
             
             // Keep paddle within bounds
@@ -1002,6 +1088,10 @@
             frameCount = 0;
             errorAccumulation1 = 0;
             errorAccumulation2 = 0;
+            smoothedErrorOffset1 = 0;
+            smoothedErrorOffset2 = 0;
+            targetPaddle1Y = 0;
+            targetPaddle2Y = 0;
             
             // Randomize colors
             ballColor = getRandomColor();
